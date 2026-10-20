@@ -1,0 +1,212 @@
+Begin optimization report for: main
+
+LOOP BEGIN at main.cpp (58, 5)
+<Predicate Optimized v1>
+
+    LOOP BEGIN at main.cpp (59, 9)
+    LOOP END
+LOOP END
+
+LOOP BEGIN at main.cpp (59, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (59, 9)
+<Remainder loop>
+LOOP END
+
+LOOP BEGIN at main.cpp (66, 5)
+    remark #15300: LOOP WAS VECTORIZED
+    remark #15305: vectorization support: vector length 8
+    remark #15389: vectorization support: unmasked unaligned unit stride store: x [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (67, 9) ] 
+    remark #15475: --- begin vector loop cost summary ---
+    remark #15476: scalar cost: 5.000000 
+    remark #15477: vector cost: 2.296875 
+    remark #15478: estimated potential speedup: 2.093750 
+    remark #15309: vectorization support: normalized vectorization overhead 1.296875
+    remark #15488: --- end vector loop cost summary ---
+    remark #15447: --- begin vector loop memory reference summary ---
+    remark #15451: unmasked unaligned unit stride stores: 1 
+    remark #15474: --- end vector loop memory reference summary ---
+LOOP END
+
+LOOP BEGIN at main.cpp (66, 5)
+<Remainder loop for vectorization>
+LOOP END
+
+LOOP BEGIN at main.cpp (88, 5)
+    remark #15521: Loop was not vectorized: loop control variable was not identified. Explicitly compute the iteration count before executing the loop or try using canonical loop form from OpenMP specification
+LOOP END
+
+LOOP BEGIN at main.cpp (97, 5)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between write_pos [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (99, 30) ] and write_pos [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (99, 13) ] 
+    remark #15346: vector dependence: assumed FLOW dependence between write_pos [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (99, 30) ] and write_pos [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (99, 30) ] 
+LOOP END
+
+LOOP BEGIN at main.cpp (97, 5)
+<Remainder loop>
+LOOP END
+
+LOOP BEGIN at main.cpp (121, 5)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between first_removed and first_removed [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (123, 18) ] 
+LOOP END
+
+LOOP BEGIN at main.cpp (121, 5)
+<Remainder loop>
+LOOP END
+
+LOOP BEGIN at main.cpp (136, 5)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (136, 5)
+<Remainder loop>
+LOOP END
+
+LOOP BEGIN at main.cpp (152, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (158, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_basic [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 25) ] and y y_basic 
+LOOP END
+
+LOOP BEGIN at main.cpp (152, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (158, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_opt [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 25) ] and y y_opt 
+LOOP END
+
+LOOP BEGIN at main.cpp (152, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (158, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_opt_2 [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 25) ] and y y_opt_2 
+LOOP END
+
+LOOP BEGIN at main.cpp (152, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (158, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_block [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (161, 25) ] and y y_block 
+LOOP END
+
+LOOP BEGIN at main.cpp (175, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (181, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_guided_basic [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 25) ] and y y_guided_basic 
+LOOP END
+
+LOOP BEGIN at main.cpp (175, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (181, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_guided_opt_2 [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 25) ] and y y_guided_opt_2 
+LOOP END
+
+LOOP BEGIN at main.cpp (175, 9)
+    remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+LOOP END
+
+LOOP BEGIN at main.cpp (181, 9)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 22) ] 
+    remark #15346: vector dependence: assumed ANTI dependence between y y_guided_opt_3 [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (184, 25) ] and y y_guided_opt_3 
+LOOP END
+
+LOOP BEGIN at main.cpp (241, 5)
+    remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+    remark #15346: vector dependence: assumed OUTPUT dependence between correct and correct 
+    remark #15346: vector dependence: assumed OUTPUT dependence between correct and correct 
+    remark #15346: vector dependence: assumed OUTPUT dependence between correct and correct 
+LOOP END
+
+LOOP BEGIN at main.cpp (290, 5)
+
+    LOOP BEGIN at main.cpp (291, 9)
+        remark #15527: Loop was not vectorized: function call to  cannot be vectorized
+    LOOP END
+
+    LOOP BEGIN at main.cpp (297, 9)
+        remark #15344: Loop was not vectorized: vector dependence prevents vectorization
+        remark #15346: vector dependence: assumed FLOW dependence between checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (299, 22) ] and checksum [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (299, 22) ] 
+        remark #15346: vector dependence: assumed ANTI dependence between y y_block [ /home/lucas/Documents/GLASs_env/GEMV/main.cpp (299, 25) ] and y y_block 
+    LOOP END
+LOOP END
+=================================================================
+
+Begin optimization report for: atoi
+=================================================================
+
+Begin optimization report for: main::$_0::operator()(char const*, void (*)(float const*, float const*, double*, int, int), double*) const
+
+LOOP BEGIN at main.cpp (152, 9)
+LOOP END
+
+LOOP BEGIN at main.cpp (158, 9)
+LOOP END
+=================================================================
+
+Begin optimization report for: main::$_1::operator()(char const*, void (*)(int const*, float const*, float const*, double*, int, int, int), double*) const
+
+LOOP BEGIN at main.cpp (175, 9)
+LOOP END
+
+LOOP BEGIN at main.cpp (181, 9)
+LOOP END
+=================================================================
+
+Begin optimization report for: std::numeric_limits<double>::infinity()
+=================================================================
+
+Begin optimization report for: std::common_type<std::chrono::duration<long, std::ratio<1l, 1000000000l>>, std::chrono::duration<long, std::ratio<1l, 1000000000l>>>::type std::chrono::operator-<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l>>, std::chrono::duration<long, std::ratio<1l, 1000000000l>>>(std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l>>> const&, std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l>>> const&)
+=================================================================
+
+Begin optimization report for: std::chrono::duration<double, std::ratio<1l, 1l>>::duration<long, std::ratio<1l, 1000000000l>, void>(std::chrono::duration<long, std::ratio<1l, 1000000000l>> const&)
+=================================================================
+
+Begin optimization report for: std::chrono::duration<double, std::ratio<1l, 1l>>::count() const
+=================================================================
+
+Begin optimization report for: std::common_type<std::chrono::duration<long, std::ratio<1l, 1000000000l>>, std::chrono::duration<long, std::ratio<1l, 1000000000l>>>::type std::chrono::operator-<long, std::ratio<1l, 1000000000l>, long, std::ratio<1l, 1000000000l>>(std::chrono::duration<long, std::ratio<1l, 1000000000l>> const&, std::chrono::duration<long, std::ratio<1l, 1000000000l>> const&)
+=================================================================
+
+Begin optimization report for: std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long, std::ratio<1l, 1000000000l>>>::time_since_epoch() const
+=================================================================
+
+Begin optimization report for: std::chrono::duration<long, std::ratio<1l, 1000000000l>>::count() const
+=================================================================
+
+Begin optimization report for: std::chrono::duration<long, std::ratio<1l, 1000000000l>>::duration<long, void>(long const&)
+=================================================================
+
+Begin optimization report for: std::enable_if<__is_duration<std::chrono::duration<double, std::ratio<1l, 1l>>>::value, std::chrono::duration<double, std::ratio<1l, 1l>>>::type std::chrono::duration_cast<std::chrono::duration<double, std::ratio<1l, 1l>>, long, std::ratio<1l, 1000000000l>>(std::chrono::duration<long, std::ratio<1l, 1000000000l>> const&)
+=================================================================
+
+Begin optimization report for: std::chrono::duration<double, std::ratio<1l, 1l>> std::chrono::__duration_cast_impl<std::chrono::duration<double, std::ratio<1l, 1l>>, std::ratio<1l, 1000000000l>, double, true, false>::__cast<long, std::ratio<1l, 1000000000l>>(std::chrono::duration<long, std::ratio<1l, 1000000000l>> const&)
+=================================================================
+
+Begin optimization report for: std::chrono::duration<double, std::ratio<1l, 1l>>::duration<double, void>(double const&)
+=================================================================
+

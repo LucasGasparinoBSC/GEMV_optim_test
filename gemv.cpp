@@ -3,6 +3,15 @@
 #include <cstdlib>
 #include <vector>
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
+#if defined(__x86_64__) || defined(__i386__)
 static inline double hsum256_pd(__m256d v) {
     const __m128d lo = _mm256_castpd256_pd128(v);
     const __m128d hi = _mm256_extractf128_pd(v, 1);
@@ -10,6 +19,16 @@ static inline double hsum256_pd(__m256d v) {
     const __m128d hi64 = _mm_unpackhi_pd(pair, pair);
     return _mm_cvtsd_f64(_mm_add_sd(pair, hi64));
 }
+
+#if defined(GEMV_ENABLE_AVX512) && (defined(__GNUC__) || defined(__clang__))
+__attribute__((target("avx512f,avx512dq")))
+static inline double hsum512_pd(__m512d v) {
+    alignas(64) double lanes[8];
+    _mm512_store_pd(lanes, v);
+    return (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]) +
+           (lanes[4] + lanes[5]) + (lanes[6] + lanes[7]);
+}
+#endif
 
 void GEMV_opt(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
     // Perform matrix-vector multiplication y = A * x with float products and double accumulation.
@@ -135,7 +154,177 @@ void GEMV_opt_2(const float* __restrict A, const float* __restrict x, double* __
         y[i] = sum;
     }
 }
+#else
+void GEMV_opt(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
 
+void GEMV_opt_2(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
+#endif
+
+#if defined(GEMV_ENABLE_AVX512) && (defined(__GNUC__) || defined(__clang__)) && \
+    (defined(__x86_64__) || defined(__i386__))
+__attribute__((target("avx512f,avx512dq")))
+void GEMV_opt_3(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    // AVX-512 version of the 4-row micro-kernel: process 16 float products per iteration.
+    int i = 0;
+    for (; i + 4 <= m; i += 4) {
+        const float* row0 = A + (i + 0) * n;
+        const float* row1 = A + (i + 1) * n;
+        const float* row2 = A + (i + 2) * n;
+        const float* row3 = A + (i + 3) * n;
+
+        __m512d s0_lo = _mm512_setzero_pd();
+        __m512d s0_hi = _mm512_setzero_pd();
+        __m512d s1_lo = _mm512_setzero_pd();
+        __m512d s1_hi = _mm512_setzero_pd();
+        __m512d s2_lo = _mm512_setzero_pd();
+        __m512d s2_hi = _mm512_setzero_pd();
+        __m512d s3_lo = _mm512_setzero_pd();
+        __m512d s3_hi = _mm512_setzero_pd();
+
+        int j = 0;
+        for (; j + 16 <= n; j += 16) {
+            const __m512 xv = _mm512_loadu_ps(x + j);
+            const __m512 p0 = _mm512_mul_ps(_mm512_loadu_ps(row0 + j), xv);
+            const __m512 p1 = _mm512_mul_ps(_mm512_loadu_ps(row1 + j), xv);
+            const __m512 p2 = _mm512_mul_ps(_mm512_loadu_ps(row2 + j), xv);
+            const __m512 p3 = _mm512_mul_ps(_mm512_loadu_ps(row3 + j), xv);
+
+            s0_lo = _mm512_add_pd(s0_lo, _mm512_cvtps_pd(_mm512_castps512_ps256(p0)));
+            s0_hi = _mm512_add_pd(s0_hi, _mm512_cvtps_pd(_mm512_extractf32x8_ps(p0, 1)));
+            s1_lo = _mm512_add_pd(s1_lo, _mm512_cvtps_pd(_mm512_castps512_ps256(p1)));
+            s1_hi = _mm512_add_pd(s1_hi, _mm512_cvtps_pd(_mm512_extractf32x8_ps(p1, 1)));
+            s2_lo = _mm512_add_pd(s2_lo, _mm512_cvtps_pd(_mm512_castps512_ps256(p2)));
+            s2_hi = _mm512_add_pd(s2_hi, _mm512_cvtps_pd(_mm512_extractf32x8_ps(p2, 1)));
+            s3_lo = _mm512_add_pd(s3_lo, _mm512_cvtps_pd(_mm512_castps512_ps256(p3)));
+            s3_hi = _mm512_add_pd(s3_hi, _mm512_cvtps_pd(_mm512_extractf32x8_ps(p3, 1)));
+        }
+
+        double sum0 = hsum512_pd(_mm512_add_pd(s0_lo, s0_hi));
+        double sum1 = hsum512_pd(_mm512_add_pd(s1_lo, s1_hi));
+        double sum2 = hsum512_pd(_mm512_add_pd(s2_lo, s2_hi));
+        double sum3 = hsum512_pd(_mm512_add_pd(s3_lo, s3_hi));
+
+        for (; j < n; ++j) {
+            const float xj = x[j];
+            sum0 += static_cast<double>(row0[j] * xj);
+            sum1 += static_cast<double>(row1[j] * xj);
+            sum2 += static_cast<double>(row2[j] * xj);
+            sum3 += static_cast<double>(row3[j] * xj);
+        }
+
+        y[i + 0] = sum0;
+        y[i + 1] = sum1;
+        y[i + 2] = sum2;
+        y[i + 3] = sum3;
+    }
+
+    // Remaining rows use the same AVX-512 vector width.
+    for (; i < m; ++i) {
+        const float* Arow = A + i * n;
+        __m512d sum_lo = _mm512_setzero_pd();
+        __m512d sum_hi = _mm512_setzero_pd();
+
+        int j = 0;
+        for (; j + 16 <= n; j += 16) {
+            const __m512 xv = _mm512_loadu_ps(x + j);
+            const __m512 prod = _mm512_mul_ps(_mm512_loadu_ps(Arow + j), xv);
+            sum_lo = _mm512_add_pd(sum_lo, _mm512_cvtps_pd(_mm512_castps512_ps256(prod)));
+            sum_hi = _mm512_add_pd(sum_hi, _mm512_cvtps_pd(_mm512_extractf32x8_ps(prod, 1)));
+        }
+
+        double sum = hsum512_pd(_mm512_add_pd(sum_lo, sum_hi));
+        for (; j < n; ++j) {
+            sum += static_cast<double>(Arow[j] * x[j]);
+        }
+        y[i] = sum;
+    }
+}
+#endif
+
+#if defined(__aarch64__)
+void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    // Four-row NEON micro-kernel: multiply four floats at a time and widen
+    // each pair of float products before accumulating in double precision.
+    int i = 0;
+    for (; i + 4 <= m; i += 4) {
+        const float* row0 = A + (i + 0) * n;
+        const float* row1 = A + (i + 1) * n;
+        const float* row2 = A + (i + 2) * n;
+        const float* row3 = A + (i + 3) * n;
+
+        float64x2_t s0_lo = vdupq_n_f64(0.0);
+        float64x2_t s0_hi = vdupq_n_f64(0.0);
+        float64x2_t s1_lo = vdupq_n_f64(0.0);
+        float64x2_t s1_hi = vdupq_n_f64(0.0);
+        float64x2_t s2_lo = vdupq_n_f64(0.0);
+        float64x2_t s2_hi = vdupq_n_f64(0.0);
+        float64x2_t s3_lo = vdupq_n_f64(0.0);
+        float64x2_t s3_hi = vdupq_n_f64(0.0);
+
+        int j = 0;
+        for (; j + 4 <= n; j += 4) {
+            const float32x4_t xv = vld1q_f32(x + j);
+            const float32x4_t p0 = vmulq_f32(vld1q_f32(row0 + j), xv);
+            const float32x4_t p1 = vmulq_f32(vld1q_f32(row1 + j), xv);
+            const float32x4_t p2 = vmulq_f32(vld1q_f32(row2 + j), xv);
+            const float32x4_t p3 = vmulq_f32(vld1q_f32(row3 + j), xv);
+
+            s0_lo = vaddq_f64(s0_lo, vcvt_f64_f32(vget_low_f32(p0)));
+            s0_hi = vaddq_f64(s0_hi, vcvt_f64_f32(vget_high_f32(p0)));
+            s1_lo = vaddq_f64(s1_lo, vcvt_f64_f32(vget_low_f32(p1)));
+            s1_hi = vaddq_f64(s1_hi, vcvt_f64_f32(vget_high_f32(p1)));
+            s2_lo = vaddq_f64(s2_lo, vcvt_f64_f32(vget_low_f32(p2)));
+            s2_hi = vaddq_f64(s2_hi, vcvt_f64_f32(vget_high_f32(p2)));
+            s3_lo = vaddq_f64(s3_lo, vcvt_f64_f32(vget_low_f32(p3)));
+            s3_hi = vaddq_f64(s3_hi, vcvt_f64_f32(vget_high_f32(p3)));
+        }
+
+        double sum0 = vaddvq_f64(vaddq_f64(s0_lo, s0_hi));
+        double sum1 = vaddvq_f64(vaddq_f64(s1_lo, s1_hi));
+        double sum2 = vaddvq_f64(vaddq_f64(s2_lo, s2_hi));
+        double sum3 = vaddvq_f64(vaddq_f64(s3_lo, s3_hi));
+        for (; j < n; ++j) {
+            const float xj = x[j];
+            sum0 += static_cast<double>(row0[j] * xj);
+            sum1 += static_cast<double>(row1[j] * xj);
+            sum2 += static_cast<double>(row2[j] * xj);
+            sum3 += static_cast<double>(row3[j] * xj);
+        }
+
+        y[i + 0] = sum0;
+        y[i + 1] = sum1;
+        y[i + 2] = sum2;
+        y[i + 3] = sum3;
+    }
+
+    for (; i < m; ++i) {
+        const float* row = A + i * n;
+        float64x2_t sum_lo = vdupq_n_f64(0.0);
+        float64x2_t sum_hi = vdupq_n_f64(0.0);
+        int j = 0;
+        for (; j + 4 <= n; j += 4) {
+            const float32x4_t p = vmulq_f32(vld1q_f32(row + j), vld1q_f32(x + j));
+            sum_lo = vaddq_f64(sum_lo, vcvt_f64_f32(vget_low_f32(p)));
+            sum_hi = vaddq_f64(sum_hi, vcvt_f64_f32(vget_high_f32(p)));
+        }
+        double sum = vaddvq_f64(vaddq_f64(sum_lo, sum_hi));
+        for (; j < n; ++j) {
+            sum += static_cast<double>(row[j] * x[j]);
+        }
+        y[i] = sum;
+    }
+}
+#else
+void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
+#endif
+
+#if defined(__x86_64__) || defined(__i386__)
 static void GEMV_block_impl(const float* __restrict A, const float* __restrict x, double* __restrict y,
                             int m, int n, int block_n) {
     // Column blocking over n with the same 4-row micro-kernel used by GEMV_opt_2.
@@ -244,6 +433,17 @@ void GEMV_block_bs(const float* __restrict A, const float* __restrict x, double*
                    int m, int n, int block_n) {
     GEMV_block_impl(A, x, y, m, n, block_n);
 }
+#else
+void GEMV_block(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
+
+void GEMV_block_bs(const float* __restrict A, const float* __restrict x, double* __restrict y,
+                   int m, int n, int block_n) {
+    (void)block_n;
+    GEMV_basic(A, x, y, m, n);
+}
+#endif
 
 void GEMV_basic(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
     // Basic implementation of matrix-vector multiplication y = A * x with float products and double accumulation.
@@ -367,343 +567,4 @@ void guided_GEMV_opt_2(const int* __restrict listIdx, const float* __restrict A,
         }
         y[i] = sum;
     }
-}
-
-void guided_GEMV_opt_3(const int* __restrict listIdx, const float* __restrict A, const float* __restrict x,
-                       double* __restrict y, int m, int ncols, int nIdx) {
-    int i = 0;
-    for (; i + 4 <= m; i += 4) {
-        const float* row0 = A + (i + 0) * ncols;
-        const float* row1 = A + (i + 1) * ncols;
-        const float* row2 = A + (i + 2) * ncols;
-        const float* row3 = A + (i + 3) * ncols;
-
-        __m256d s0_lo = _mm256_setzero_pd();
-        __m256d s0_hi = _mm256_setzero_pd();
-        __m256d s1_lo = _mm256_setzero_pd();
-        __m256d s1_hi = _mm256_setzero_pd();
-        __m256d s2_lo = _mm256_setzero_pd();
-        __m256d s2_hi = _mm256_setzero_pd();
-        __m256d s3_lo = _mm256_setzero_pd();
-        __m256d s3_hi = _mm256_setzero_pd();
-
-        double tail0 = 0.0;
-        double tail1 = 0.0;
-        double tail2 = 0.0;
-        double tail3 = 0.0;
-
-        int j = 0;
-        while (j < nIdx) {
-            const int start = listIdx[j];
-            int run = 1;
-            while (j + run < nIdx && listIdx[j + run] == start + run) {
-                ++run;
-            }
-
-            int k = 0;
-            for (; k + 8 <= run; k += 8) {
-                const int base = start + k;
-                const __m256 xv = _mm256_loadu_ps(x + base);
-
-                const __m256 p0 = _mm256_mul_ps(_mm256_loadu_ps(row0 + base), xv);
-                const __m256 p1 = _mm256_mul_ps(_mm256_loadu_ps(row1 + base), xv);
-                const __m256 p2 = _mm256_mul_ps(_mm256_loadu_ps(row2 + base), xv);
-                const __m256 p3 = _mm256_mul_ps(_mm256_loadu_ps(row3 + base), xv);
-
-                s0_lo = _mm256_add_pd(s0_lo, _mm256_cvtps_pd(_mm256_castps256_ps128(p0)));
-                s0_hi = _mm256_add_pd(s0_hi, _mm256_cvtps_pd(_mm256_extractf128_ps(p0, 1)));
-                s1_lo = _mm256_add_pd(s1_lo, _mm256_cvtps_pd(_mm256_castps256_ps128(p1)));
-                s1_hi = _mm256_add_pd(s1_hi, _mm256_cvtps_pd(_mm256_extractf128_ps(p1, 1)));
-                s2_lo = _mm256_add_pd(s2_lo, _mm256_cvtps_pd(_mm256_castps256_ps128(p2)));
-                s2_hi = _mm256_add_pd(s2_hi, _mm256_cvtps_pd(_mm256_extractf128_ps(p2, 1)));
-                s3_lo = _mm256_add_pd(s3_lo, _mm256_cvtps_pd(_mm256_castps256_ps128(p3)));
-                s3_hi = _mm256_add_pd(s3_hi, _mm256_cvtps_pd(_mm256_extractf128_ps(p3, 1)));
-            }
-
-            for (; k < run; ++k) {
-                const int col = start + k;
-                const float xj = x[col];
-                tail0 += static_cast<double>(row0[col] * xj);
-                tail1 += static_cast<double>(row1[col] * xj);
-                tail2 += static_cast<double>(row2[col] * xj);
-                tail3 += static_cast<double>(row3[col] * xj);
-            }
-
-            j += run;
-        }
-
-        y[i + 0] = tail0 + hsum256_pd(_mm256_add_pd(s0_lo, s0_hi));
-        y[i + 1] = tail1 + hsum256_pd(_mm256_add_pd(s1_lo, s1_hi));
-        y[i + 2] = tail2 + hsum256_pd(_mm256_add_pd(s2_lo, s2_hi));
-        y[i + 3] = tail3 + hsum256_pd(_mm256_add_pd(s3_lo, s3_hi));
-    }
-
-    for (; i < m; ++i) {
-        const float* row = A + i * ncols;
-        __m256d s_lo = _mm256_setzero_pd();
-        __m256d s_hi = _mm256_setzero_pd();
-        double tail = 0.0;
-
-        int j = 0;
-        while (j < nIdx) {
-            const int start = listIdx[j];
-            int run = 1;
-            while (j + run < nIdx && listIdx[j + run] == start + run) {
-                ++run;
-            }
-
-            int k = 0;
-            for (; k + 8 <= run; k += 8) {
-                const int base = start + k;
-                const __m256 xv = _mm256_loadu_ps(x + base);
-                const __m256 p = _mm256_mul_ps(_mm256_loadu_ps(row + base), xv);
-                s_lo = _mm256_add_pd(s_lo, _mm256_cvtps_pd(_mm256_castps256_ps128(p)));
-                s_hi = _mm256_add_pd(s_hi, _mm256_cvtps_pd(_mm256_extractf128_ps(p, 1)));
-            }
-
-            for (; k < run; ++k) {
-                const int col = start + k;
-                tail += static_cast<double>(row[col] * x[col]);
-            }
-
-            j += run;
-        }
-
-        y[i] = tail + hsum256_pd(_mm256_add_pd(s_lo, s_hi));
-    }
-}
-
-void guided_GEMV_opt_4(const int* __restrict listIdx, const float* __restrict A, const float* __restrict x,
-                       double* __restrict y, int m, int ncols, int nIdx) {
-    if (nIdx <= 0) {
-        for (int i = 0; i < m; ++i) {
-            y[i] = 0.0;
-        }
-        return;
-    }
-
-    // Reuse run buffers across calls so benchmarked kernels do not pay allocator overhead.
-    static thread_local std::vector<int> run_starts;
-    static thread_local std::vector<int> run_lens;
-    static thread_local const int* cached_list_ptr = nullptr;
-    static thread_local int cached_nIdx = -1;
-    static thread_local int cached_first = -1;
-    static thread_local int cached_last = -1;
-    static thread_local int cached_nruns = 0;
-
-    if ((int)run_starts.size() < nIdx) {
-        run_starts.resize(nIdx);
-        run_lens.resize(nIdx);
-    }
-
-    const int first = listIdx[0];
-    const int last = listIdx[nIdx - 1];
-    const bool need_rebuild = (cached_list_ptr != listIdx) ||
-                              (cached_nIdx != nIdx) ||
-                              (cached_first != first) ||
-                              (cached_last != last);
-
-    if (need_rebuild) {
-        int nruns = 0;
-        int j = 0;
-        while (j < nIdx) {
-            const int start = listIdx[j];
-            int len = 1;
-            while (j + len < nIdx && listIdx[j + len] == start + len) {
-                ++len;
-            }
-            run_starts[nruns] = start;
-            run_lens[nruns] = len;
-            ++nruns;
-            j += len;
-        }
-
-        cached_list_ptr = listIdx;
-        cached_nIdx = nIdx;
-        cached_first = first;
-        cached_last = last;
-        cached_nruns = nruns;
-    }
-    const int nruns = cached_nruns;
-
-    constexpr int SIMD_RUN_THRESHOLD = 16;
-
-    int i = 0;
-    for (; i + 4 <= m; i += 4) {
-        const float* row0 = A + (i + 0) * ncols;
-        const float* row1 = A + (i + 1) * ncols;
-        const float* row2 = A + (i + 2) * ncols;
-        const float* row3 = A + (i + 3) * ncols;
-
-        __m256d s0_lo_a = _mm256_setzero_pd();
-        __m256d s0_hi_a = _mm256_setzero_pd();
-        __m256d s1_lo_a = _mm256_setzero_pd();
-        __m256d s1_hi_a = _mm256_setzero_pd();
-        __m256d s2_lo_a = _mm256_setzero_pd();
-        __m256d s2_hi_a = _mm256_setzero_pd();
-        __m256d s3_lo_a = _mm256_setzero_pd();
-        __m256d s3_hi_a = _mm256_setzero_pd();
-
-        __m256d s0_lo_b = _mm256_setzero_pd();
-        __m256d s0_hi_b = _mm256_setzero_pd();
-        __m256d s1_lo_b = _mm256_setzero_pd();
-        __m256d s1_hi_b = _mm256_setzero_pd();
-        __m256d s2_lo_b = _mm256_setzero_pd();
-        __m256d s2_hi_b = _mm256_setzero_pd();
-        __m256d s3_lo_b = _mm256_setzero_pd();
-        __m256d s3_hi_b = _mm256_setzero_pd();
-
-        double tail0 = 0.0;
-        double tail1 = 0.0;
-        double tail2 = 0.0;
-        double tail3 = 0.0;
-
-        for (int r = 0; r < nruns; ++r) {
-            const int start = run_starts[r];
-            const int len = run_lens[r];
-
-            if (len < SIMD_RUN_THRESHOLD) {
-                for (int k = 0; k < len; ++k) {
-                    const int col = start + k;
-                    const float xj = x[col];
-                    tail0 += static_cast<double>(row0[col] * xj);
-                    tail1 += static_cast<double>(row1[col] * xj);
-                    tail2 += static_cast<double>(row2[col] * xj);
-                    tail3 += static_cast<double>(row3[col] * xj);
-                }
-                continue;
-            }
-
-            int k = 0;
-            for (; k + 16 <= len; k += 16) {
-                const int b0 = start + k;
-                const int b1 = b0 + 8;
-
-                const __m256 x0 = _mm256_loadu_ps(x + b0);
-                const __m256 x1 = _mm256_loadu_ps(x + b1);
-
-                const __m256 p00 = _mm256_mul_ps(_mm256_loadu_ps(row0 + b0), x0);
-                const __m256 p10 = _mm256_mul_ps(_mm256_loadu_ps(row1 + b0), x0);
-                const __m256 p20 = _mm256_mul_ps(_mm256_loadu_ps(row2 + b0), x0);
-                const __m256 p30 = _mm256_mul_ps(_mm256_loadu_ps(row3 + b0), x0);
-
-                const __m256 p01 = _mm256_mul_ps(_mm256_loadu_ps(row0 + b1), x1);
-                const __m256 p11 = _mm256_mul_ps(_mm256_loadu_ps(row1 + b1), x1);
-                const __m256 p21 = _mm256_mul_ps(_mm256_loadu_ps(row2 + b1), x1);
-                const __m256 p31 = _mm256_mul_ps(_mm256_loadu_ps(row3 + b1), x1);
-
-                s0_lo_a = _mm256_add_pd(s0_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p00)));
-                s0_hi_a = _mm256_add_pd(s0_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p00, 1)));
-                s1_lo_a = _mm256_add_pd(s1_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p10)));
-                s1_hi_a = _mm256_add_pd(s1_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p10, 1)));
-                s2_lo_a = _mm256_add_pd(s2_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p20)));
-                s2_hi_a = _mm256_add_pd(s2_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p20, 1)));
-                s3_lo_a = _mm256_add_pd(s3_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p30)));
-                s3_hi_a = _mm256_add_pd(s3_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p30, 1)));
-
-                s0_lo_b = _mm256_add_pd(s0_lo_b, _mm256_cvtps_pd(_mm256_castps256_ps128(p01)));
-                s0_hi_b = _mm256_add_pd(s0_hi_b, _mm256_cvtps_pd(_mm256_extractf128_ps(p01, 1)));
-                s1_lo_b = _mm256_add_pd(s1_lo_b, _mm256_cvtps_pd(_mm256_castps256_ps128(p11)));
-                s1_hi_b = _mm256_add_pd(s1_hi_b, _mm256_cvtps_pd(_mm256_extractf128_ps(p11, 1)));
-                s2_lo_b = _mm256_add_pd(s2_lo_b, _mm256_cvtps_pd(_mm256_castps256_ps128(p21)));
-                s2_hi_b = _mm256_add_pd(s2_hi_b, _mm256_cvtps_pd(_mm256_extractf128_ps(p21, 1)));
-                s3_lo_b = _mm256_add_pd(s3_lo_b, _mm256_cvtps_pd(_mm256_castps256_ps128(p31)));
-                s3_hi_b = _mm256_add_pd(s3_hi_b, _mm256_cvtps_pd(_mm256_extractf128_ps(p31, 1)));
-            }
-
-            for (; k + 8 <= len; k += 8) {
-                const int base = start + k;
-                const __m256 xv = _mm256_loadu_ps(x + base);
-
-                const __m256 p0 = _mm256_mul_ps(_mm256_loadu_ps(row0 + base), xv);
-                const __m256 p1 = _mm256_mul_ps(_mm256_loadu_ps(row1 + base), xv);
-                const __m256 p2 = _mm256_mul_ps(_mm256_loadu_ps(row2 + base), xv);
-                const __m256 p3 = _mm256_mul_ps(_mm256_loadu_ps(row3 + base), xv);
-
-                s0_lo_a = _mm256_add_pd(s0_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p0)));
-                s0_hi_a = _mm256_add_pd(s0_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p0, 1)));
-                s1_lo_a = _mm256_add_pd(s1_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p1)));
-                s1_hi_a = _mm256_add_pd(s1_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p1, 1)));
-                s2_lo_a = _mm256_add_pd(s2_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p2)));
-                s2_hi_a = _mm256_add_pd(s2_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p2, 1)));
-                s3_lo_a = _mm256_add_pd(s3_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p3)));
-                s3_hi_a = _mm256_add_pd(s3_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p3, 1)));
-            }
-
-            for (; k < len; ++k) {
-                const int col = start + k;
-                const float xj = x[col];
-                tail0 += static_cast<double>(row0[col] * xj);
-                tail1 += static_cast<double>(row1[col] * xj);
-                tail2 += static_cast<double>(row2[col] * xj);
-                tail3 += static_cast<double>(row3[col] * xj);
-            }
-        }
-
-        const __m256d s0 = _mm256_add_pd(_mm256_add_pd(s0_lo_a, s0_hi_a), _mm256_add_pd(s0_lo_b, s0_hi_b));
-        const __m256d s1 = _mm256_add_pd(_mm256_add_pd(s1_lo_a, s1_hi_a), _mm256_add_pd(s1_lo_b, s1_hi_b));
-        const __m256d s2 = _mm256_add_pd(_mm256_add_pd(s2_lo_a, s2_hi_a), _mm256_add_pd(s2_lo_b, s2_hi_b));
-        const __m256d s3 = _mm256_add_pd(_mm256_add_pd(s3_lo_a, s3_hi_a), _mm256_add_pd(s3_lo_b, s3_hi_b));
-
-        y[i + 0] = tail0 + hsum256_pd(s0);
-        y[i + 1] = tail1 + hsum256_pd(s1);
-        y[i + 2] = tail2 + hsum256_pd(s2);
-        y[i + 3] = tail3 + hsum256_pd(s3);
-    }
-
-    for (; i < m; ++i) {
-        const float* row = A + i * ncols;
-
-        __m256d s_lo_a = _mm256_setzero_pd();
-        __m256d s_hi_a = _mm256_setzero_pd();
-        __m256d s_lo_b = _mm256_setzero_pd();
-        __m256d s_hi_b = _mm256_setzero_pd();
-        double tail = 0.0;
-
-        for (int r = 0; r < nruns; ++r) {
-            const int start = run_starts[r];
-            const int len = run_lens[r];
-
-            if (len < SIMD_RUN_THRESHOLD) {
-                for (int k = 0; k < len; ++k) {
-                    const int col = start + k;
-                    tail += static_cast<double>(row[col] * x[col]);
-                }
-                continue;
-            }
-
-            int k = 0;
-            for (; k + 16 <= len; k += 16) {
-                const int b0 = start + k;
-                const int b1 = b0 + 8;
-
-                const __m256 x0 = _mm256_loadu_ps(x + b0);
-                const __m256 x1 = _mm256_loadu_ps(x + b1);
-                const __m256 p0 = _mm256_mul_ps(_mm256_loadu_ps(row + b0), x0);
-                const __m256 p1 = _mm256_mul_ps(_mm256_loadu_ps(row + b1), x1);
-
-                s_lo_a = _mm256_add_pd(s_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p0)));
-                s_hi_a = _mm256_add_pd(s_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p0, 1)));
-                s_lo_b = _mm256_add_pd(s_lo_b, _mm256_cvtps_pd(_mm256_castps256_ps128(p1)));
-                s_hi_b = _mm256_add_pd(s_hi_b, _mm256_cvtps_pd(_mm256_extractf128_ps(p1, 1)));
-            }
-
-            for (; k + 8 <= len; k += 8) {
-                const int base = start + k;
-                const __m256 xv = _mm256_loadu_ps(x + base);
-                const __m256 p = _mm256_mul_ps(_mm256_loadu_ps(row + base), xv);
-                s_lo_a = _mm256_add_pd(s_lo_a, _mm256_cvtps_pd(_mm256_castps256_ps128(p)));
-                s_hi_a = _mm256_add_pd(s_hi_a, _mm256_cvtps_pd(_mm256_extractf128_ps(p, 1)));
-            }
-
-            for (; k < len; ++k) {
-                const int col = start + k;
-                tail += static_cast<double>(row[col] * x[col]);
-            }
-        }
-
-        const __m256d s = _mm256_add_pd(_mm256_add_pd(s_lo_a, s_hi_a), _mm256_add_pd(s_lo_b, s_hi_b));
-        y[i] = tail + hsum256_pd(s);
-    }
-
 }

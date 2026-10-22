@@ -1,10 +1,10 @@
 #ifndef GEMV_HPP
 #define GEMV_HPP
 
-#include <immintrin.h>
-
 void GEMV_opt(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);
 void GEMV_opt_2(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);
+void GEMV_opt_3(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);
+void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);
 void GEMV_block(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);
 void GEMV_block_bs(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n, int block_n);
 void GEMV_basic(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n);

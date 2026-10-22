@@ -7,6 +7,14 @@
 #include <string>
 #include "gemv.hpp"
 
+#if defined(GEMV_ENABLE_AVX512) && (defined(__GNUC__) || defined(__clang__)) && \
+    (defined(__x86_64__) || defined(__i386__))
+static bool cpu_has_avx512() {
+    __builtin_cpu_init();
+    return __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512dq");
+}
+#endif
+
 // Macro for linearized indexing of a 2D array
 #define IDX(i, j, ncols) ((i) * (ncols) + (j))
 
@@ -31,25 +39,25 @@ int main(int argc, char* argv[]) {
     int* listIdx = (int*)calloc(nIdx_guided, sizeof(int));
     double *y_opt = (double *)calloc(nrows, sizeof(double));
     double *y_opt_2 = (double *)calloc(nrows, sizeof(double));
+    double *y_opt_3 = (double *)calloc(nrows, sizeof(double));
+    double *y_opt_arm = (double *)calloc(nrows, sizeof(double));
     double *y_block = (double *)calloc(nrows, sizeof(double));
     double *y_guided_basic = (double *)calloc(nrows, sizeof(double));
     double *y_guided_opt_2 = (double *)calloc(nrows, sizeof(double));
-    double *y_guided_opt_3 = (double *)calloc(nrows, sizeof(double));
-    double *y_guided_opt_4 = (double *)calloc(nrows, sizeof(double));
     double *y_basic = (double *)calloc(nrows, sizeof(double));
 
-    if (!A || !x || !listIdx || !y_opt || !y_opt_2 || !y_block || !y_guided_basic || !y_guided_opt_2 || !y_guided_opt_3 || !y_guided_opt_4 || !y_basic) {
+    if (!A || !x || !listIdx || !y_opt || !y_opt_2 || !y_opt_3 || !y_opt_arm || !y_block || !y_guided_basic || !y_guided_opt_2 || !y_basic) {
         std::fprintf(stderr, "Allocation failed\n");
         free(A);
         free(x);
         free(listIdx);
         free(y_opt);
         free(y_opt_2);
+        free(y_opt_3);
+        free(y_opt_arm);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
-        free(y_guided_opt_3);
-        free(y_guided_opt_4);
         free(y_basic);
         return 1;
     }
@@ -78,10 +86,11 @@ int main(int argc, char* argv[]) {
         free(listIdx);
         free(y_opt);
         free(y_opt_2);
+        free(y_opt_3);
+        free(y_opt_arm);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
-        free(y_guided_opt_3);
         free(y_basic);
         return 1;
     }
@@ -109,11 +118,11 @@ int main(int argc, char* argv[]) {
         free(listIdx);
         free(y_opt);
         free(y_opt_2);
+        free(y_opt_3);
+        free(y_opt_arm);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
-        free(y_guided_opt_3);
-        free(y_guided_opt_4);
         free(y_basic);
         return 1;
     }
@@ -201,20 +210,38 @@ int main(int argc, char* argv[]) {
     const BenchResult basic_res = bench("GEMV_basic", GEMV_basic, y_basic);
     const BenchResult opt_res = bench("GEMV_opt", GEMV_opt, y_opt);
     const BenchResult opt2_res = bench("GEMV_opt_2", GEMV_opt_2, y_opt_2);
+    BenchResult opt3_res{0.0, 0.0};
+    bool opt3_ran = false;
+#if defined(GEMV_ENABLE_AVX512) && (defined(__GNUC__) || defined(__clang__))
+    if (cpu_has_avx512()) {
+        opt3_res = bench("GEMV_opt_3", GEMV_opt_3, y_opt_3);
+        opt3_ran = true;
+    } else {
+        std::printf("GEMV_opt_3 skipped: CPU lacks AVX-512F/AVX-512DQ support.\n");
+    }
+#else
+    std::printf("GEMV_opt_3 skipped: AVX-512 kernel was not enabled at compile time.\n");
+#endif
+    BenchResult opt_arm_res{0.0, 0.0};
+    bool opt_arm_ran = false;
+#if defined(__aarch64__)
+    opt_arm_res = bench("GEMV_opt_arm", GEMV_opt_arm, y_opt_arm);
+    opt_arm_ran = true;
+#else
+    std::printf("GEMV_opt_arm skipped: AArch64 NEON kernel is only enabled on ARM64.\n");
+#endif
     const BenchResult block_res = bench("GEMV_block", GEMV_block, y_block);
     const BenchResult guided_basic_res = bench_guided("guided_GEMV_basic", guided_GEMV_basic, y_guided_basic);
     const BenchResult guided_opt2_res = bench_guided("guided_GEMV_opt_2", guided_GEMV_opt_2, y_guided_opt_2);
-    const BenchResult guided_opt3_res = bench_guided("guided_GEMV_opt_3", guided_GEMV_opt_3, y_guided_opt_3);
-    const BenchResult guided_opt4_res = bench_guided("guided_GEMV_opt_4", guided_GEMV_opt_4, y_guided_opt_4);
 
     const double avg_basic_s = basic_res.avg_s;
     const double avg_opt_s = opt_res.avg_s;
     const double avg_opt_2_s = opt2_res.avg_s;
+    const double avg_opt_3_s = opt3_res.avg_s;
+    const double avg_opt_arm_s = opt_arm_res.avg_s;
     const double avg_block_s = block_res.avg_s;
     const double avg_guided_basic_s = guided_basic_res.avg_s;
     const double avg_guided_opt_2_s = guided_opt2_res.avg_s;
-    const double avg_guided_opt_3_s = guided_opt3_res.avg_s;
-    const double avg_guided_opt_4_s = guided_opt4_res.avg_s;
 
     char csv_name[128];
     std::snprintf(csv_name, sizeof(csv_name), "timing_%d_%d.csv", nrows, ncols);
@@ -229,6 +256,15 @@ int main(int argc, char* argv[]) {
                      avg_opt_s * 1.0e6, avg_basic_s / avg_opt_s, opt_res.checksum, warmup_runs, num_runs);
         std::fprintf(csv, "kernels,GEMV_opt_2,-1,%.6f,%.6f,%.6e,%d,%d\n",
                      avg_opt_2_s * 1.0e6, avg_basic_s / avg_opt_2_s, opt2_res.checksum, warmup_runs, num_runs);
+        if (opt3_ran) {
+            std::fprintf(csv, "kernels,GEMV_opt_3,-1,%.6f,%.6f,%.6e,%d,%d\n",
+                         avg_opt_3_s * 1.0e6, avg_basic_s / avg_opt_3_s, opt3_res.checksum, warmup_runs, num_runs);
+        }
+        if (opt_arm_ran) {
+            std::fprintf(csv, "kernels,GEMV_opt_arm,-1,%.6f,%.6f,%.6e,%d,%d\n",
+                         avg_opt_arm_s * 1.0e6, avg_basic_s / avg_opt_arm_s,
+                         opt_arm_res.checksum, warmup_runs, num_runs);
+        }
         std::fprintf(csv, "kernels,GEMV_block,-1,%.6f,%.6f,%.6e,%d,%d\n",
                      avg_block_s * 1.0e6, avg_basic_s / avg_block_s, block_res.checksum, warmup_runs, num_runs);
         std::fprintf(csv, "kernels,guided_GEMV_basic,-1,%.6f,%.6f,%.6e,%d,%d\n",
@@ -237,12 +273,6 @@ int main(int argc, char* argv[]) {
         std::fprintf(csv, "kernels,guided_GEMV_opt_2,-1,%.6f,%.6f,%.6e,%d,%d\n",
                  avg_guided_opt_2_s * 1.0e6, avg_guided_basic_s / avg_guided_opt_2_s,
                  guided_opt2_res.checksum, warmup_runs, num_runs);
-        std::fprintf(csv, "kernels,guided_GEMV_opt_3,-1,%.6f,%.6f,%.6e,%d,%d\n",
-                 avg_guided_opt_3_s * 1.0e6, avg_guided_basic_s / avg_guided_opt_3_s,
-             guided_opt3_res.checksum, warmup_runs, num_runs);
-        std::fprintf(csv, "kernels,guided_GEMV_opt_4,-1,%.6f,%.6f,%.6e,%d,%d\n",
-                 avg_guided_opt_4_s * 1.0e6, avg_guided_basic_s / avg_guided_opt_4_s,
-             guided_opt4_res.checksum, warmup_runs, num_runs);
     }
 
     // Compare the results
@@ -255,6 +285,14 @@ int main(int argc, char* argv[]) {
         if (std::fabs(y_opt_2[i] - y_basic[i]) > 1e-6) {
             correct = false;
             printf("Mismatch at row %d: y_opt_2 = %.6f, y_basic = %.6f\n", i, y_opt_2[i], y_basic[i]);
+        }
+        if (opt3_ran && std::fabs(y_opt_3[i] - y_basic[i]) > 1e-6) {
+            correct = false;
+            printf("Mismatch at row %d: y_opt_3 = %.6f, y_basic = %.6f\n", i, y_opt_3[i], y_basic[i]);
+        }
+        if (opt_arm_ran && std::fabs(y_opt_arm[i] - y_basic[i]) > 1e-6) {
+            correct = false;
+            printf("Mismatch at row %d: y_opt_arm = %.6f, y_basic = %.6f\n", i, y_opt_arm[i], y_basic[i]);
         }
         if (std::fabs(y_block[i] - y_basic[i]) > 1e-6) {
             correct = false;
@@ -274,17 +312,17 @@ int main(int argc, char* argv[]) {
     if (avg_opt_2_s > 0.0) {
         std::printf("Speedup (basic/opt_2): %.2fx\n", avg_basic_s / avg_opt_2_s);
     }
+    if (avg_opt_3_s > 0.0) {
+        std::printf("Speedup (basic/opt_3): %.2fx\n", avg_basic_s / avg_opt_3_s);
+    }
+    if (avg_opt_arm_s > 0.0) {
+        std::printf("Speedup (basic/opt_arm): %.2fx\n", avg_basic_s / avg_opt_arm_s);
+    }
     if (avg_block_s > 0.0) {
         std::printf("Speedup (basic/block): %.2fx\n", avg_basic_s / avg_block_s);
     }
     if (avg_guided_opt_2_s > 0.0) {
         std::printf("Speedup (guided_basic/guided_opt_2): %.2fx\n", avg_guided_basic_s / avg_guided_opt_2_s);
-    }
-    if (avg_guided_opt_3_s > 0.0) {
-        std::printf("Speedup (guided_basic/guided_opt_3): %.2fx\n", avg_guided_basic_s / avg_guided_opt_3_s);
-    }
-    if (avg_guided_opt_4_s > 0.0) {
-        std::printf("Speedup (guided_basic/guided_opt_4): %.2fx\n", avg_guided_basic_s / avg_guided_opt_4_s);
     }
 
     // Sweep block sizes for GEMV_block to find the best setting on this machine.
@@ -347,11 +385,11 @@ int main(int argc, char* argv[]) {
     free(listIdx);
     free(y_opt);
     free(y_opt_2);
+    free(y_opt_3);
+    free(y_opt_arm);
     free(y_block);
     free(y_guided_basic);
     free(y_guided_opt_2);
-    free(y_guided_opt_3);
-    free(y_guided_opt_4);
     free(y_basic);
     return 0;
 }

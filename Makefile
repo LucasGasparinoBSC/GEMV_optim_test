@@ -1,7 +1,7 @@
 CXX := icpx
 
 # Use the same core flags discussed in this workspace.
-CXXFLAGS := -O3 -g -march=native -fp-model=precise -fno-math-errno -fno-exceptions -fno-rtti -std=c++17
+CXXFLAGS := -O3 -g -march=native -DGEMV_ENABLE_AVX512 -fp-model=precise -fno-math-errno -fno-exceptions -fno-rtti -std=c++17
 # Keep vectorization diagnostics available when needed.
 REPORT_FLAGS := -qopt-report=5 -qopt-report-phase=vec
 

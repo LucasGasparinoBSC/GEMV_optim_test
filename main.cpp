@@ -41,12 +41,16 @@ int main(int argc, char* argv[]) {
     double *y_opt_2 = (double *)calloc(nrows, sizeof(double));
     double *y_opt_3 = (double *)calloc(nrows, sizeof(double));
     double *y_opt_arm = (double *)calloc(nrows, sizeof(double));
+    double *y_opt_arm_sve_vla = (double *)calloc(nrows, sizeof(double));
+    double *y_opt_arm_sve_128 = (double *)calloc(nrows, sizeof(double));
     double *y_block = (double *)calloc(nrows, sizeof(double));
     double *y_guided_basic = (double *)calloc(nrows, sizeof(double));
     double *y_guided_opt_2 = (double *)calloc(nrows, sizeof(double));
     double *y_basic = (double *)calloc(nrows, sizeof(double));
 
-    if (!A || !x || !listIdx || !y_opt || !y_opt_2 || !y_opt_3 || !y_opt_arm || !y_block || !y_guided_basic || !y_guided_opt_2 || !y_basic) {
+    if (!A || !x || !listIdx || !y_opt || !y_opt_2 || !y_opt_3 || !y_opt_arm ||
+        !y_opt_arm_sve_vla || !y_opt_arm_sve_128 || !y_block || !y_guided_basic ||
+        !y_guided_opt_2 || !y_basic) {
         std::fprintf(stderr, "Allocation failed\n");
         free(A);
         free(x);
@@ -55,6 +59,8 @@ int main(int argc, char* argv[]) {
         free(y_opt_2);
         free(y_opt_3);
         free(y_opt_arm);
+        free(y_opt_arm_sve_vla);
+        free(y_opt_arm_sve_128);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
@@ -88,6 +94,8 @@ int main(int argc, char* argv[]) {
         free(y_opt_2);
         free(y_opt_3);
         free(y_opt_arm);
+        free(y_opt_arm_sve_vla);
+        free(y_opt_arm_sve_128);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
@@ -120,6 +128,8 @@ int main(int argc, char* argv[]) {
         free(y_opt_2);
         free(y_opt_3);
         free(y_opt_arm);
+        free(y_opt_arm_sve_vla);
+        free(y_opt_arm_sve_128);
         free(y_block);
         free(y_guided_basic);
         free(y_guided_opt_2);
@@ -225,11 +235,23 @@ int main(int argc, char* argv[]) {
     BenchResult opt_arm_res{0.0, 0.0};
     bool opt_arm_ran = false;
 #if defined(__aarch64__)
-    opt_arm_res = bench("GEMV_opt_arm", GEMV_opt_arm, y_opt_arm);
+    opt_arm_res = bench("GEMV_opt_arm_neon", GEMV_opt_arm, y_opt_arm);
     opt_arm_ran = true;
 #else
     std::printf("GEMV_opt_arm skipped: AArch64 NEON kernel is only enabled on ARM64.\n");
 #endif
+    BenchResult opt_arm_sve_vla_res{0.0, 0.0};
+    BenchResult opt_arm_sve_128_res{0.0, 0.0};
+    bool opt_arm_sve_vla_ran = false;
+    bool opt_arm_sve_128_ran = false;
+    if (GEMV_arm_sve_available()) {
+        opt_arm_sve_vla_res = bench("GEMV_opt_arm_sve_vla", GEMV_opt_arm_sve_vla, y_opt_arm_sve_vla);
+        opt_arm_sve_128_res = bench("GEMV_opt_arm_sve_128", GEMV_opt_arm_sve_128, y_opt_arm_sve_128);
+        opt_arm_sve_vla_ran = true;
+        opt_arm_sve_128_ran = true;
+    } else {
+        std::printf("GEMV_opt_arm_sve_vla and GEMV_opt_arm_sve_128 skipped: SVE was not enabled in the build or is unavailable at runtime.\n");
+    }
     const BenchResult block_res = bench("GEMV_block", GEMV_block, y_block);
     const BenchResult guided_basic_res = bench_guided("guided_GEMV_basic", guided_GEMV_basic, y_guided_basic);
     const BenchResult guided_opt2_res = bench_guided("guided_GEMV_opt_2", guided_GEMV_opt_2, y_guided_opt_2);
@@ -239,6 +261,8 @@ int main(int argc, char* argv[]) {
     const double avg_opt_2_s = opt2_res.avg_s;
     const double avg_opt_3_s = opt3_res.avg_s;
     const double avg_opt_arm_s = opt_arm_res.avg_s;
+    const double avg_opt_arm_sve_vla_s = opt_arm_sve_vla_res.avg_s;
+    const double avg_opt_arm_sve_128_s = opt_arm_sve_128_res.avg_s;
     const double avg_block_s = block_res.avg_s;
     const double avg_guided_basic_s = guided_basic_res.avg_s;
     const double avg_guided_opt_2_s = guided_opt2_res.avg_s;
@@ -261,9 +285,17 @@ int main(int argc, char* argv[]) {
                          avg_opt_3_s * 1.0e6, avg_basic_s / avg_opt_3_s, opt3_res.checksum, warmup_runs, num_runs);
         }
         if (opt_arm_ran) {
-            std::fprintf(csv, "kernels,GEMV_opt_arm,-1,%.6f,%.6f,%.6e,%d,%d\n",
+            std::fprintf(csv, "kernels,GEMV_opt_arm_neon,-1,%.6f,%.6f,%.6e,%d,%d\n",
                          avg_opt_arm_s * 1.0e6, avg_basic_s / avg_opt_arm_s,
                          opt_arm_res.checksum, warmup_runs, num_runs);
+        }
+        if (opt_arm_sve_vla_ran) {
+            std::fprintf(csv, "kernels,GEMV_opt_arm_sve_vla,-1,%.6f,%.6f,%.6e,%d,%d\n",
+                         avg_opt_arm_sve_vla_s * 1.0e6, avg_basic_s / avg_opt_arm_sve_vla_s,
+                         opt_arm_sve_vla_res.checksum, warmup_runs, num_runs);
+            std::fprintf(csv, "kernels,GEMV_opt_arm_sve_128,-1,%.6f,%.6f,%.6e,%d,%d\n",
+                         avg_opt_arm_sve_128_s * 1.0e6, avg_basic_s / avg_opt_arm_sve_128_s,
+                         opt_arm_sve_128_res.checksum, warmup_runs, num_runs);
         }
         std::fprintf(csv, "kernels,GEMV_block,-1,%.6f,%.6f,%.6e,%d,%d\n",
                      avg_block_s * 1.0e6, avg_basic_s / avg_block_s, block_res.checksum, warmup_runs, num_runs);
@@ -292,7 +324,15 @@ int main(int argc, char* argv[]) {
         }
         if (opt_arm_ran && std::fabs(y_opt_arm[i] - y_basic[i]) > 1e-6) {
             correct = false;
-            printf("Mismatch at row %d: y_opt_arm = %.6f, y_basic = %.6f\n", i, y_opt_arm[i], y_basic[i]);
+            printf("Mismatch at row %d: y_opt_arm_neon = %.6f, y_basic = %.6f\n", i, y_opt_arm[i], y_basic[i]);
+        }
+        if (opt_arm_sve_vla_ran && std::fabs(y_opt_arm_sve_vla[i] - y_basic[i]) > 1e-6) {
+            correct = false;
+            printf("Mismatch at row %d: y_opt_arm_sve_vla = %.6f, y_basic = %.6f\n", i, y_opt_arm_sve_vla[i], y_basic[i]);
+        }
+        if (opt_arm_sve_128_ran && std::fabs(y_opt_arm_sve_128[i] - y_basic[i]) > 1e-6) {
+            correct = false;
+            printf("Mismatch at row %d: y_opt_arm_sve_128 = %.6f, y_basic = %.6f\n", i, y_opt_arm_sve_128[i], y_basic[i]);
         }
         if (std::fabs(y_block[i] - y_basic[i]) > 1e-6) {
             correct = false;
@@ -316,7 +356,13 @@ int main(int argc, char* argv[]) {
         std::printf("Speedup (basic/opt_3): %.2fx\n", avg_basic_s / avg_opt_3_s);
     }
     if (avg_opt_arm_s > 0.0) {
-        std::printf("Speedup (basic/opt_arm): %.2fx\n", avg_basic_s / avg_opt_arm_s);
+        std::printf("Speedup (basic/opt_arm_neon): %.2fx\n", avg_basic_s / avg_opt_arm_s);
+    }
+    if (avg_opt_arm_sve_vla_s > 0.0) {
+        std::printf("Speedup (basic/opt_arm_sve_vla): %.2fx\n", avg_basic_s / avg_opt_arm_sve_vla_s);
+    }
+    if (avg_opt_arm_sve_128_s > 0.0) {
+        std::printf("Speedup (basic/opt_arm_sve_128): %.2fx\n", avg_basic_s / avg_opt_arm_sve_128_s);
     }
     if (avg_block_s > 0.0) {
         std::printf("Speedup (basic/block): %.2fx\n", avg_basic_s / avg_block_s);
@@ -387,6 +433,8 @@ int main(int argc, char* argv[]) {
     free(y_opt_2);
     free(y_opt_3);
     free(y_opt_arm);
+    free(y_opt_arm_sve_vla);
+    free(y_opt_arm_sve_128);
     free(y_block);
     free(y_guided_basic);
     free(y_guided_opt_2);

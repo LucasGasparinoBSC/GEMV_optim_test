@@ -1,7 +1,13 @@
 #include "gemv.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <vector>
+
+#if defined(__linux__) && defined(__aarch64__)
+#include <sys/auxv.h>
+#include <asm/hwcap.h>
+#endif
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
@@ -9,6 +15,9 @@
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#if defined(__ARM_FEATURE_SVE)
+#include <arm_sve.h>
+#endif
 #endif
 
 #if defined(__x86_64__) || defined(__i386__)
@@ -321,6 +330,134 @@ void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* 
 #else
 void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* __restrict y, int m, int n) {
     GEMV_basic(A, x, y, m, n);
+}
+#endif
+
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+static void GEMV_opt_arm_sve_impl(const float* __restrict A, const float* __restrict x,
+                                  double* __restrict y, int m, int n, bool fixed_128) {
+    const int lanes_f32 = fixed_128 ? 4 : static_cast<int>(svcntw());
+    int i = 0;
+    for (; i + 4 <= m; i += 4) {
+        const float* row0 = A + (i + 0) * n;
+        const float* row1 = A + (i + 1) * n;
+        const float* row2 = A + (i + 2) * n;
+        const float* row3 = A + (i + 3) * n;
+
+        svfloat64_t s0_even = svdup_n_f64(0.0);
+        svfloat64_t s0_odd = svdup_n_f64(0.0);
+        svfloat64_t s1_even = svdup_n_f64(0.0);
+        svfloat64_t s1_odd = svdup_n_f64(0.0);
+        svfloat64_t s2_even = svdup_n_f64(0.0);
+        svfloat64_t s2_odd = svdup_n_f64(0.0);
+        svfloat64_t s3_even = svdup_n_f64(0.0);
+        svfloat64_t s3_odd = svdup_n_f64(0.0);
+
+        int j = 0;
+        for (; j < n; j += lanes_f32) {
+            const uint64_t end = fixed_128
+                ? static_cast<uint64_t>((j + 4 < n) ? j + 4 : n)
+                : static_cast<uint64_t>(n);
+            const svbool_t pg = svwhilelt_b32(static_cast<uint64_t>(j), end);
+            const svfloat32_t xv = svld1_f32(pg, x + j);
+            const svfloat32_t p0 = svmul_f32_z(pg, svld1_f32(pg, row0 + j), xv);
+            const svfloat32_t p1 = svmul_f32_z(pg, svld1_f32(pg, row1 + j), xv);
+            const svfloat32_t p2 = svmul_f32_z(pg, svld1_f32(pg, row2 + j), xv);
+            const svfloat32_t p3 = svmul_f32_z(pg, svld1_f32(pg, row3 + j), xv);
+
+            s0_even = svadd_f64_x(svptrue_b64(), s0_even,
+                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p0, p0)));
+            s0_odd = svadd_f64_x(svptrue_b64(), s0_odd,
+                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p0, p0)));
+            s1_even = svadd_f64_x(svptrue_b64(), s1_even,
+                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p1, p1)));
+            s1_odd = svadd_f64_x(svptrue_b64(), s1_odd,
+                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p1, p1)));
+            s2_even = svadd_f64_x(svptrue_b64(), s2_even,
+                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p2, p2)));
+            s2_odd = svadd_f64_x(svptrue_b64(), s2_odd,
+                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p2, p2)));
+            s3_even = svadd_f64_x(svptrue_b64(), s3_even,
+                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p3, p3)));
+            s3_odd = svadd_f64_x(svptrue_b64(), s3_odd,
+                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p3, p3)));
+        }
+
+        double sum0 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s0_even, s0_odd));
+        double sum1 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s1_even, s1_odd));
+        double sum2 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s2_even, s2_odd));
+        double sum3 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s3_even, s3_odd));
+        if (fixed_128) {
+            for (; j < n; ++j) {
+                const float xj = x[j];
+                sum0 += static_cast<double>(row0[j] * xj);
+                sum1 += static_cast<double>(row1[j] * xj);
+                sum2 += static_cast<double>(row2[j] * xj);
+                sum3 += static_cast<double>(row3[j] * xj);
+            }
+        }
+        y[i + 0] = sum0;
+        y[i + 1] = sum1;
+        y[i + 2] = sum2;
+        y[i + 3] = sum3;
+    }
+
+    for (; i < m; ++i) {
+        const float* row = A + i * n;
+        svfloat64_t sum_even = svdup_n_f64(0.0);
+        svfloat64_t sum_odd = svdup_n_f64(0.0);
+        int j = 0;
+        for (; j < n; j += lanes_f32) {
+            const uint64_t end = fixed_128
+                ? static_cast<uint64_t>((j + 4 < n) ? j + 4 : n)
+                : static_cast<uint64_t>(n);
+            const svbool_t pg = svwhilelt_b32(static_cast<uint64_t>(j), end);
+            const svfloat32_t p = svmul_f32_z(pg, svld1_f32(pg, row + j), svld1_f32(pg, x + j));
+            sum_even = svadd_f64_x(svptrue_b64(), sum_even,
+                                    svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p, p)));
+            sum_odd = svadd_f64_x(svptrue_b64(), sum_odd,
+                                   svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p, p)));
+        }
+        double sum = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), sum_even, sum_odd));
+        if (fixed_128) {
+            for (; j < n; ++j) {
+                sum += static_cast<double>(row[j] * x[j]);
+            }
+        }
+        y[i] = sum;
+    }
+}
+
+void GEMV_opt_arm_sve_vla(const float* __restrict A, const float* __restrict x,
+                          double* __restrict y, int m, int n) {
+    GEMV_opt_arm_sve_impl(A, x, y, m, n, false);
+}
+
+void GEMV_opt_arm_sve_128(const float* __restrict A, const float* __restrict x,
+                          double* __restrict y, int m, int n) {
+    GEMV_opt_arm_sve_impl(A, x, y, m, n, true);
+}
+
+bool GEMV_arm_sve_available() {
+#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+    return (getauxval(AT_HWCAP) & HWCAP_SVE) != 0;
+#else
+    return false;
+#endif
+}
+#else
+void GEMV_opt_arm_sve_vla(const float* __restrict A, const float* __restrict x,
+                          double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
+
+void GEMV_opt_arm_sve_128(const float* __restrict A, const float* __restrict x,
+                          double* __restrict y, int m, int n) {
+    GEMV_basic(A, x, y, m, n);
+}
+
+bool GEMV_arm_sve_available() {
+    return false;
 }
 #endif
 

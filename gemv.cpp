@@ -1,5 +1,6 @@
 #include "gemv.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
@@ -336,7 +337,9 @@ void GEMV_opt_arm(const float* __restrict A, const float* __restrict x, double* 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 static void GEMV_opt_arm_sve_impl(const float* __restrict A, const float* __restrict x,
                                   double* __restrict y, int m, int n, bool fixed_128) {
-    const int lanes_f32 = fixed_128 ? 4 : static_cast<int>(svcntw());
+    // Convert and accumulate svcntd() float products per iteration. Using a
+    // double-lane predicate avoids confusing the interleaved UZP lane layout.
+    const int lanes = fixed_128 ? 2 : static_cast<int>(svcntd());
     int i = 0;
     for (; i + 4 <= m; i += 4) {
         const float* row0 = A + (i + 0) * n;
@@ -344,58 +347,30 @@ static void GEMV_opt_arm_sve_impl(const float* __restrict A, const float* __rest
         const float* row2 = A + (i + 2) * n;
         const float* row3 = A + (i + 3) * n;
 
-        svfloat64_t s0_even = svdup_n_f64(0.0);
-        svfloat64_t s0_odd = svdup_n_f64(0.0);
-        svfloat64_t s1_even = svdup_n_f64(0.0);
-        svfloat64_t s1_odd = svdup_n_f64(0.0);
-        svfloat64_t s2_even = svdup_n_f64(0.0);
-        svfloat64_t s2_odd = svdup_n_f64(0.0);
-        svfloat64_t s3_even = svdup_n_f64(0.0);
-        svfloat64_t s3_odd = svdup_n_f64(0.0);
-
+        svfloat64_t s0 = svdup_n_f64(0.0);
+        svfloat64_t s1 = svdup_n_f64(0.0);
+        svfloat64_t s2 = svdup_n_f64(0.0);
+        svfloat64_t s3 = svdup_n_f64(0.0);
         int j = 0;
-        for (; j < n; j += lanes_f32) {
-            const uint64_t end = fixed_128
-                ? static_cast<uint64_t>((j + 4 < n) ? j + 4 : n)
-                : static_cast<uint64_t>(n);
-            const svbool_t pg = svwhilelt_b32(static_cast<uint64_t>(j), end);
-            const svfloat32_t xv = svld1_f32(pg, x + j);
-            const svfloat32_t p0 = svmul_f32_z(pg, svld1_f32(pg, row0 + j), xv);
-            const svfloat32_t p1 = svmul_f32_z(pg, svld1_f32(pg, row1 + j), xv);
-            const svfloat32_t p2 = svmul_f32_z(pg, svld1_f32(pg, row2 + j), xv);
-            const svfloat32_t p3 = svmul_f32_z(pg, svld1_f32(pg, row3 + j), xv);
-
-            s0_even = svadd_f64_x(svptrue_b64(), s0_even,
-                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p0, p0)));
-            s0_odd = svadd_f64_x(svptrue_b64(), s0_odd,
-                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p0, p0)));
-            s1_even = svadd_f64_x(svptrue_b64(), s1_even,
-                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p1, p1)));
-            s1_odd = svadd_f64_x(svptrue_b64(), s1_odd,
-                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p1, p1)));
-            s2_even = svadd_f64_x(svptrue_b64(), s2_even,
-                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p2, p2)));
-            s2_odd = svadd_f64_x(svptrue_b64(), s2_odd,
-                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p2, p2)));
-            s3_even = svadd_f64_x(svptrue_b64(), s3_even,
-                                   svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p3, p3)));
-            s3_odd = svadd_f64_x(svptrue_b64(), s3_odd,
-                                  svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p3, p3)));
+        for (; j < n; j += lanes) {
+            const int active = std::min(lanes, n - j);
+            const svbool_t pg32 = svwhilelt_b32(uint64_t{0}, static_cast<uint64_t>(active));
+            const svbool_t pg64 = svwhilelt_b64(uint64_t{0}, static_cast<uint64_t>(active));
+            const svfloat32_t xv = svld1_f32(pg32, x + j);
+            const svfloat32_t p0 = svmul_f32_z(pg32, svld1_f32(pg32, row0 + j), xv);
+            const svfloat32_t p1 = svmul_f32_z(pg32, svld1_f32(pg32, row1 + j), xv);
+            const svfloat32_t p2 = svmul_f32_z(pg32, svld1_f32(pg32, row2 + j), xv);
+            const svfloat32_t p3 = svmul_f32_z(pg32, svld1_f32(pg32, row3 + j), xv);
+            s0 = svadd_f64_m(pg64, s0, svcvt_f64_f32_x(pg64, p0));
+            s1 = svadd_f64_m(pg64, s1, svcvt_f64_f32_x(pg64, p1));
+            s2 = svadd_f64_m(pg64, s2, svcvt_f64_f32_x(pg64, p2));
+            s3 = svadd_f64_m(pg64, s3, svcvt_f64_f32_x(pg64, p3));
         }
-
-        double sum0 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s0_even, s0_odd));
-        double sum1 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s1_even, s1_odd));
-        double sum2 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s2_even, s2_odd));
-        double sum3 = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), s3_even, s3_odd));
-        if (fixed_128) {
-            for (; j < n; ++j) {
-                const float xj = x[j];
-                sum0 += static_cast<double>(row0[j] * xj);
-                sum1 += static_cast<double>(row1[j] * xj);
-                sum2 += static_cast<double>(row2[j] * xj);
-                sum3 += static_cast<double>(row3[j] * xj);
-            }
-        }
+        const svbool_t all64 = svptrue_b64();
+        const double sum0 = svaddv_f64(all64, s0);
+        const double sum1 = svaddv_f64(all64, s1);
+        const double sum2 = svaddv_f64(all64, s2);
+        const double sum3 = svaddv_f64(all64, s3);
         y[i + 0] = sum0;
         y[i + 1] = sum1;
         y[i + 2] = sum2;
@@ -404,27 +379,16 @@ static void GEMV_opt_arm_sve_impl(const float* __restrict A, const float* __rest
 
     for (; i < m; ++i) {
         const float* row = A + i * n;
-        svfloat64_t sum_even = svdup_n_f64(0.0);
-        svfloat64_t sum_odd = svdup_n_f64(0.0);
+        svfloat64_t sum_vec = svdup_n_f64(0.0);
         int j = 0;
-        for (; j < n; j += lanes_f32) {
-            const uint64_t end = fixed_128
-                ? static_cast<uint64_t>((j + 4 < n) ? j + 4 : n)
-                : static_cast<uint64_t>(n);
-            const svbool_t pg = svwhilelt_b32(static_cast<uint64_t>(j), end);
-            const svfloat32_t p = svmul_f32_z(pg, svld1_f32(pg, row + j), svld1_f32(pg, x + j));
-            sum_even = svadd_f64_x(svptrue_b64(), sum_even,
-                                    svcvt_f64_f32_x(svptrue_b64(), svuzp1_f32(p, p)));
-            sum_odd = svadd_f64_x(svptrue_b64(), sum_odd,
-                                   svcvt_f64_f32_x(svptrue_b64(), svuzp2_f32(p, p)));
+        for (; j < n; j += lanes) {
+            const int active = std::min(lanes, n - j);
+            const svbool_t pg32 = svwhilelt_b32(uint64_t{0}, static_cast<uint64_t>(active));
+            const svbool_t pg64 = svwhilelt_b64(uint64_t{0}, static_cast<uint64_t>(active));
+            const svfloat32_t p = svmul_f32_z(pg32, svld1_f32(pg32, row + j), svld1_f32(pg32, x + j));
+            sum_vec = svadd_f64_m(pg64, sum_vec, svcvt_f64_f32_x(pg64, p));
         }
-        double sum = svaddv_f64(svptrue_b64(), svadd_f64_x(svptrue_b64(), sum_even, sum_odd));
-        if (fixed_128) {
-            for (; j < n; ++j) {
-                sum += static_cast<double>(row[j] * x[j]);
-            }
-        }
-        y[i] = sum;
+        y[i] = svaddv_f64(svptrue_b64(), sum_vec);
     }
 }
 
